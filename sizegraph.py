@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 from typing import Dict, List
 from dataclasses import dataclass
+import time
 
 @dataclass
 class FileInfo:
@@ -56,7 +57,7 @@ class SizeGraph(tk.Tk):
         # Create and configure progress window
         self.progress_window = tk.Toplevel(self)
         self.progress_window.title("Scanning Files...")
-        self.progress_window.geometry("300x150")  # Reduced from 200 to 150
+        self.progress_window.geometry("300x200")  # Reduced from 200 to 150
         self.progress_window.transient(self)
         
         # Center progress window
@@ -82,6 +83,14 @@ class SizeGraph(tk.Tk):
         
         self.size_label = tk.Label(self.progress_window, text="Total size: 0 MB")
         self.size_label.pack(pady=5)
+        
+        # Add timer label after the existing labels
+        self.timer_label = tk.Label(self.progress_window, text="Time elapsed: 0:00")
+        self.timer_label.pack(pady=5)
+        
+        # Add timer counter
+        self.start_time = time.time()
+        self.update_timer()
         
         print("Progress window created, starting scan...")
         
@@ -338,6 +347,18 @@ class SizeGraph(tk.Tk):
         
         info_text = f"Path: {path_str}\nSize: {size_mb:.2f} MB ({percentage:.1f}%)"
         self.info_label.config(text=info_text)
+    
+    def update_timer(self):
+        """Update the timer display"""
+        if (hasattr(self, 'progress_window') and 
+            hasattr(self, 'timer_label') and 
+            self.scanning and
+            self.progress_window.winfo_exists()):
+            elapsed = int(time.time() - self.start_time)
+            minutes = elapsed // 60
+            seconds = elapsed % 60
+            self.timer_label.config(text=f"Time elapsed: {minutes}:{seconds:02d}")
+            self.after(1000, self.update_timer)
 
 if __name__ == "__main__":
     root = tk.Tk()
