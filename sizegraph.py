@@ -95,28 +95,35 @@ class SizeGraph(tk.Tk):
         """Process files in chunks to keep UI responsive"""
         if not self.scanning or not self.scan_queue:
             print("\nScan queue empty or scanning stopped, finishing up...")
+            # Calculate final sizes for all directories
+            def recalculate_dir_size(item: FileInfo) -> int:
+                if not item.is_dir:
+                    return item.size
+                total = sum(recalculate_dir_size(child) for child in item.children)
+                item.size = total
+                return total
+            
+            if hasattr(self, 'root_item'):
+                self.root_item.size = recalculate_dir_size(self.root_item)
             self.finish_scan()
             return
         
         current_path, parent = self.scan_queue.pop(0)
         children = []
-        folder_size = 0
         
         try:
             for item in current_path.iterdir():
                 try:
                     if item.is_file():
                         size = item.stat().st_size
-                        folder_size += size
                         self.total_size_scanned += size
                         children.append(FileInfo(item, size, False, []))
                         self.total_files_scanned += 1
                         
-                        # Update progress every 100 files
                         if self.total_files_scanned % 100 == 0:
                             self.files_label.config(text=f"Files scanned: {self.total_files_scanned:,}")
                             self.size_label.config(text=f"Total size: {self.total_size_scanned/1024/1024:.1f} MB")
-                            self.progress_window.update()  # Force immediate update
+                            self.progress_window.update()
                     elif item.is_dir():
                         self.scan_queue.append((item, children))
                 except (OSError, PermissionError) as e:
@@ -125,24 +132,11 @@ class SizeGraph(tk.Tk):
             print(f"Error accessing directory {current_path}: {e}")
         
         if parent is not None:
-            file_info = FileInfo(current_path, folder_size, True, children)
+            file_info = FileInfo(current_path, 0, True, children)  # Size will be calculated at the end
             parent.append(file_info)
-            print(f"Folder: {current_path.name} - Size: {folder_size/1024/1024:.2f} MB")
         else:
-            self.root_item = FileInfo(current_path, folder_size, True, children)
-            
-        # If this was the last item in queue, update root size
-        if not self.scan_queue:
-            def calculate_total_size(item: FileInfo) -> int:
-                if not item.is_dir:
-                    return item.size
-                return sum(calculate_total_size(child) for child in item.children)
-            
-            final_size = calculate_total_size(self.root_item)
-            self.root_item.size = final_size
-            print(f"\nRoot directory size: {final_size/1024/1024:.2f} MB")
+            self.root_item = FileInfo(current_path, 0, True, children)  # Size will be calculated at the end
         
-        # Process next chunk after a short delay
         self.after(1, self.process_scan_queue)
     
     def finish_scan(self):
