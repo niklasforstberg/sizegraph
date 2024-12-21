@@ -1,0 +1,10 @@
+# Core dependencies
+tkinter  # Usually comes with Python, no need to install separately
+pathlib  # Part of Python standard library since 3.4
+typing   # Part of Python standard library since 3.5
+dataclasses  # Part of Python standard library since 3.7
+
+# Development dependencies (optional)
+black>=23.0.0  # Code formatting
+pylint>=2.17.0  # Code linting
+mypy>=1.0.0  # Type checking 
