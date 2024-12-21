@@ -44,45 +44,51 @@ class SizeGraph(tk.Tk):
         
         # Schedule the scan to start after the window is shown
         self.after(100, lambda: self.start_scan(root_path))
+        
+        # Add these new instance variables
+        self.total_files_scanned = 0
+        self.total_size_scanned = 0
     
     def start_scan(self, root_path: str):
         """Initialize scanning process"""
-        # Creates a progress window and starts the file scanning process
-        # Uses a queue-based approach to prevent UI freezing
-        
         print(f"\nStarting scan of: {root_path}")
         
-        # Create and configure progress window with indeterminate progress bar
+        # Create and configure progress window
         self.progress_window = tk.Toplevel(self)
         self.progress_window.title("Scanning Files...")
-        self.progress_window.geometry("300x150")
+        self.progress_window.geometry("300x150")  # Reduced from 200 to 150
         self.progress_window.transient(self)
         
         # Center progress window
         self.progress_window.geometry("+%d+%d" % (
             self.winfo_screenwidth()//2 - 150,
-            self.winfo_screenheight()//2 - 75))
+            self.winfo_screenheight()//2 - 75))  # Adjusted center point
         
+        # Main scanning label
         tk.Label(self.progress_window, text="Scanning files...", pady=10).pack()
-        self.progress_var = tk.StringVar(value="Scanning: 0 files")
-        tk.Label(self.progress_window, textvariable=self.progress_var, pady=10).pack()
         
-        self.size_var = tk.StringVar(value="Total size: 0 MB")
-        tk.Label(self.progress_window, textvariable=self.size_var, pady=10).pack()
-        
+        # Progress bar
         self.progress_bar = ttk.Progressbar(
             self.progress_window, 
             mode='indeterminate',
             length=200
         )
         self.progress_bar.pack(pady=10)
-        self.progress_bar.start(10)  # Add speed parameter (milliseconds)
+        self.progress_bar.start(10)
+        
+        # Add file count and total size labels
+        self.files_label = tk.Label(self.progress_window, text="Files scanned: 0")
+        self.files_label.pack(pady=5)
+        
+        self.size_label = tk.Label(self.progress_window, text="Total size: 0 MB")
+        self.size_label.pack(pady=5)
         
         print("Progress window created, starting scan...")
         
         # Initialize scan queue with root path
-        self.file_count = 0
-        self.scan_queue = [(Path(root_path), None)]  # (path, parent) tuples
+        self.total_files_scanned = 0
+        self.total_size_scanned = 0
+        self.scan_queue = [(Path(root_path), None)]
         self.process_scan_queue()
     
     def process_scan_queue(self):
@@ -94,20 +100,23 @@ class SizeGraph(tk.Tk):
         
         current_path, parent = self.scan_queue.pop(0)
         children = []
-        total_size = 0
+        folder_size = 0
         
         try:
             for item in current_path.iterdir():
                 try:
                     if item.is_file():
                         size = item.stat().st_size
-                        total_size += size
+                        folder_size += size
+                        self.total_size_scanned += size
                         children.append(FileInfo(item, size, False, []))
-                        self.file_count += 1
+                        self.total_files_scanned += 1
                         
-                        if self.file_count % 100 == 0:
-                            self.progress_var.set(f"Scanning: {self.file_count:,} files")
-                            self.size_var.set(f"Total size: {total_size/1024/1024:.1f} MB")
+                        # Update progress every 100 files
+                        if self.total_files_scanned % 100 == 0:
+                            self.files_label.config(text=f"Files scanned: {self.total_files_scanned:,}")
+                            self.size_label.config(text=f"Total size: {self.total_size_scanned/1024/1024:.1f} MB")
+                            self.progress_window.update()  # Force immediate update
                     elif item.is_dir():
                         self.scan_queue.append((item, children))
                 except (OSError, PermissionError) as e:
@@ -116,18 +125,22 @@ class SizeGraph(tk.Tk):
             print(f"Error accessing directory {current_path}: {e}")
         
         if parent is not None:
-            file_info = FileInfo(current_path, total_size, True, children)
+            file_info = FileInfo(current_path, folder_size, True, children)
             parent.append(file_info)
-            # Update parent's total size when we add a child
-            for p in parent:
-                if isinstance(p, FileInfo) and p.path == current_path:
-                    total_size += p.size
-            print(f"Folder: {current_path.name} - Size: {total_size/1024/1024:.2f} MB")
+            print(f"Folder: {current_path.name} - Size: {folder_size/1024/1024:.2f} MB")
         else:
-            # For root, include sizes of all children
-            root_total = total_size + sum(child.size for child in children)
-            self.root_item = FileInfo(current_path, root_total, True, children)
-            print(f"\nRoot directory size: {root_total/1024/1024:.2f} MB")
+            self.root_item = FileInfo(current_path, folder_size, True, children)
+            
+        # If this was the last item in queue, update root size
+        if not self.scan_queue:
+            def calculate_total_size(item: FileInfo) -> int:
+                if not item.is_dir:
+                    return item.size
+                return sum(calculate_total_size(child) for child in item.children)
+            
+            final_size = calculate_total_size(self.root_item)
+            self.root_item.size = final_size
+            print(f"\nRoot directory size: {final_size/1024/1024:.2f} MB")
         
         # Process next chunk after a short delay
         self.after(1, self.process_scan_queue)
