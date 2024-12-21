@@ -32,3 +32,9 @@ htmlcov/
 
 # Jupyter Notebook
 .ipynb_checkpoints 
+
+Daddy/
+# Screenshots
+Screenshot*
+windirstat.jpg
+
