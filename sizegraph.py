@@ -7,14 +7,15 @@ from dataclasses import dataclass
 
 @dataclass
 class FileInfo:
-    path: Path
-    size: int
-    percentage: float
-    is_dir: bool
-    children: List['FileInfo']
+    # Data structure to hold file/directory information
+    path: Path      # Full path to the file/directory
+    size: int       # Size in bytes
+    is_dir: bool    # True if directory, False if file
+    children: List['FileInfo']  # List of contained files/dirs (empty for files)
 
 class SizeGraph(tk.Tk):
     def __init__(self, root_path: str):
+        # Main window initialization
         super().__init__()
         
         self.title("File Size Graph")
@@ -24,14 +25,14 @@ class SizeGraph(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         self.files: Dict[str, FileInfo] = {}
-        self.scanning = True  # Add flag to track scanning state
+        self.scanning = True
         
         self.canvas = tk.Canvas(self, width=780, height=540, bg='white')
         self.canvas.pack(padx=10, pady=(10,5))
         
         self.info_label = tk.Label(
             self, 
-            text="Click any rectangle to see file info", 
+            text="This will probably take a while...", 
             wraplength=780,
             justify=tk.LEFT,
             anchor='w',
@@ -41,20 +42,33 @@ class SizeGraph(tk.Tk):
         )
         self.info_label.pack(fill=tk.X, expand=True)
         
-        # Create and show progress window
-        self.progress_window = tk.Toplevel()
+        # Schedule the scan to start after the window is shown
+        self.after(100, lambda: self.start_scan(root_path))
+    
+    def start_scan(self, root_path: str):
+        """Initialize scanning process"""
+        # Creates a progress window and starts the file scanning process
+        # Uses a queue-based approach to prevent UI freezing
+        
+        print(f"\nStarting scan of: {root_path}")
+        
+        # Create and configure progress window with indeterminate progress bar
+        self.progress_window = tk.Toplevel(self)
         self.progress_window.title("Scanning Files...")
         self.progress_window.geometry("300x150")
-        self.progress_window.transient(self)  # Make it float on top of main window
+        self.progress_window.transient(self)
         
         # Center progress window
         self.progress_window.geometry("+%d+%d" % (
-            self.winfo_screenwidth()/2 - 150,
-            self.winfo_screenheight()/2 - 75))
+            self.winfo_screenwidth()//2 - 150,
+            self.winfo_screenheight()//2 - 75))
         
         tk.Label(self.progress_window, text="Scanning files...", pady=10).pack()
-        self.progress_var = tk.StringVar(value="Found: 0 files")
+        self.progress_var = tk.StringVar(value="Scanning: 0 files")
         tk.Label(self.progress_window, textvariable=self.progress_var, pady=10).pack()
+        
+        self.size_var = tk.StringVar(value="Total size: 0 MB")
+        tk.Label(self.progress_window, textvariable=self.size_var, pady=10).pack()
         
         self.progress_bar = ttk.Progressbar(
             self.progress_window, 
@@ -62,79 +76,85 @@ class SizeGraph(tk.Tk):
             length=200
         )
         self.progress_bar.pack(pady=10)
-        self.progress_bar.start()
+        self.progress_bar.start(10)  # Add speed parameter (milliseconds)
         
-        # Update the UI
-        self.progress_window.update()
+        print("Progress window created, starting scan...")
         
-        # Start scanning directly
-        self._scan_and_draw(root_path)
+        # Initialize scan queue with root path
+        self.file_count = 0
+        self.scan_queue = [(Path(root_path), None)]  # (path, parent) tuples
+        self.process_scan_queue()
+    
+    def process_scan_queue(self):
+        """Process files in chunks to keep UI responsive"""
+        if not self.scanning or not self.scan_queue:
+            print("\nScan queue empty or scanning stopped, finishing up...")
+            self.finish_scan()
+            return
+        
+        current_path, parent = self.scan_queue.pop(0)
+        children = []
+        total_size = 0
+        
+        try:
+            for item in current_path.iterdir():
+                try:
+                    if item.is_file():
+                        size = item.stat().st_size
+                        total_size += size
+                        children.append(FileInfo(item, size, False, []))
+                        self.file_count += 1
+                        
+                        if self.file_count % 100 == 0:
+                            self.progress_var.set(f"Scanning: {self.file_count:,} files")
+                            self.size_var.set(f"Total size: {total_size/1024/1024:.1f} MB")
+                    elif item.is_dir():
+                        self.scan_queue.append((item, children))
+                except (OSError, PermissionError) as e:
+                    print(f"Error accessing {item}: {e}")
+        except (OSError, PermissionError) as e:
+            print(f"Error accessing directory {current_path}: {e}")
+        
+        if parent is not None:
+            file_info = FileInfo(current_path, total_size, True, children)
+            parent.append(file_info)
+            # Update parent's total size when we add a child
+            for p in parent:
+                if isinstance(p, FileInfo) and p.path == current_path:
+                    total_size += p.size
+            print(f"Folder: {current_path.name} - Size: {total_size/1024/1024:.2f} MB")
+        else:
+            # For root, include sizes of all children
+            root_total = total_size + sum(child.size for child in children)
+            self.root_item = FileInfo(current_path, root_total, True, children)
+            print(f"\nRoot directory size: {root_total/1024/1024:.2f} MB")
+        
+        # Process next chunk after a short delay
+        self.after(1, self.process_scan_queue)
+    
+    def finish_scan(self):
+        """Clean up after scanning is complete"""
+        print("\nScanning complete!")
+        if hasattr(self, 'progress_window'):
+            print("Closing progress window...")
+            self.progress_window.destroy()
+        self.info_label.config(text="")  # Clear the text after scan completes
+        print("Starting to draw graph...")
+        self.draw_graph()
     
     def on_closing(self):
         """Handle window close button click"""
-        self.scanning = False  # Signal scanning thread to stop
+        self.scanning = False
         self.quit()
         self.destroy()
     
-    def _scan_and_draw(self, root_path: str):
-        """Scan directory and draw graph"""
-        file_count = [0]
-        
-        def update_progress():
-            if hasattr(self, 'progress_var'):
-                self.progress_var.set(f"Found: {file_count[0]} files")
-                self.progress_window.update()
-        
-        def scan_with_progress(path: Path) -> FileInfo:
-            total_size = 0
-            children = []
-            
-            try:
-                for item in path.iterdir():
-                    try:
-                        if item.is_file():
-                            size = item.stat().st_size
-                            total_size += size
-                            children.append(FileInfo(item, size, 0, False, []))
-                            file_count[0] += 1
-                            if file_count[0] % 100 == 0:
-                                update_progress()
-                        elif item.is_dir():
-                            dir_info = scan_with_progress(item)
-                            if dir_info.size > 0:
-                                total_size += dir_info.size
-                                children.append(dir_info)
-                    except (OSError, PermissionError) as e:
-                        print(f"Error accessing {item}: {e}")
-                        continue
-            except (OSError, PermissionError) as e:
-                print(f"Error accessing directory {path}: {e}")
-                return FileInfo(path, 0, 0, True, [])
-            
-            children.sort(key=lambda x: x.size, reverse=True)
-            
-            if total_size > 0:
-                for child in children:
-                    child.percentage = (child.size / total_size) * 100
-                
-            return FileInfo(path, total_size, 100, True, children)
-        
-        # Scan directory
-        self.root_item = scan_with_progress(Path(root_path))
-        
-        # Clean up progress window
-        self.progress_window.destroy()
-        
-        # Draw the graph
-        self.draw_graph()
-    
     def draw_graph(self) -> None:
-        print("Draw graph started")
+        """Draw the treemap visualization"""
         
-        # Define colors for different file types
+        # Color mapping for different file types
         extension_colors = {
-            # Images
-            '.jpg': '#e24a4a',
+            # Colors grouped by file category
+            '.jpg': '#e24a4a',  # Red for images
             '.jpeg': '#e24a4a',
             '.png': '#e24a4a',
             '.gif': '#e24a4a',
@@ -190,6 +210,8 @@ class SizeGraph(tk.Tk):
                                lambda e, f=item: self.show_file_info(f))
         
         def worst_ratio(row, width, height, total_size):
+            """Calculate the worst aspect ratio for a row of rectangles
+            Used in the squarified treemap algorithm to optimize rectangle shapes"""
             if not row or total_size == 0:
                 return float('inf')
             
@@ -215,6 +237,8 @@ class SizeGraph(tk.Tk):
             return max_ratio if max_ratio > 0 else float('inf')
         
         def layout_row(items, x, y, width, height, total_size):
+            """Layout a single row of rectangles in the treemap
+            Handles grouping of small items and recursive layout of directories"""
             if not items or total_size == 0:
                 return y
             
@@ -225,14 +249,28 @@ class SizeGraph(tk.Tk):
             row_height = height * row_sum / total_size
             xpos = x
             
+            # Group very small items
+            small_items_size = 0
+            visible_items = []
+            
             for item in items:
-                if item.size == 0:
-                    continue
-                
                 item_width = width * item.size / row_sum
-                if item_width < 1:  # Skip too small items
-                    continue
-                
+                if item_width < 1:  # Too small to display individually
+                    small_items_size += item.size
+                else:
+                    visible_items.append(item)
+            
+            # If we have small items, create a combined rectangle
+            if small_items_size > 0:
+                combined_width = width * small_items_size / row_sum
+                if combined_width >= 1:
+                    draw_rectangle(xpos, y, combined_width, row_height, 
+                                 FileInfo(Path("Small Files"), small_items_size, False, []))
+                    xpos += combined_width
+            
+            # Draw remaining items
+            for item in visible_items:
+                item_width = width * item.size / row_sum
                 if item.is_dir and item.children:
                     draw_rectangle(xpos, y, item_width, row_height, item)
                     layout_treemap(item.children, xpos, y, item_width, row_height)
@@ -243,6 +281,8 @@ class SizeGraph(tk.Tk):
             return y + row_height
         
         def layout_treemap(items, x, y, width, height):
+            """Main treemap layout algorithm using the squarified treemap approach
+            Tries to maintain aspect ratios close to 1 for better visualization"""
             if not items:
                 return
             
@@ -270,7 +310,7 @@ class SizeGraph(tk.Tk):
             if row:
                 y = layout_row(row, x, y, width, height, total_size)
         
-        # Start the treemap layout with root's children
+        # Start layout with sorted children (largest first)
         if self.root_item.children:
             layout_treemap(
                 sorted(self.root_item.children, key=lambda x: x.size, reverse=True),
@@ -281,14 +321,15 @@ class SizeGraph(tk.Tk):
     
     def show_file_info(self, file_info: FileInfo) -> None:
         size_mb = file_info.size / (1024 * 1024)
+        # Calculate percentage relative to root item
+        percentage = (file_info.size / self.root_item.size * 100) if self.root_item.size > 0 else 0
         
-        # Truncate path if too long
         path_str = str(file_info.path)
         if len(path_str) > 100:
             path_parts = file_info.path.parts
-            path_str = f".../{'/'.join(path_parts[-3:])}"  # Show only last 3 parts
+            path_str = f".../{'/'.join(path_parts[-3:])}"
         
-        info_text = f"Path: {path_str}\nSize: {size_mb:.2f} MB ({file_info.percentage:.1f}%)"
+        info_text = f"Path: {path_str}\nSize: {size_mb:.2f} MB ({percentage:.1f}%)"
         self.info_label.config(text=info_text)
 
 if __name__ == "__main__":
