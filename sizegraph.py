@@ -28,6 +28,19 @@ class SizeGraph(tk.Tk):
         self.files: Dict[str, FileInfo] = {}
         self.scanning = True
         
+        # Add root info label before the canvas
+        self.root_info = tk.Label(
+            self,
+            text="",
+            wraplength=780,
+            justify=tk.LEFT,
+            anchor='w',
+            padx=10,
+            pady=5,
+            font=('TkDefaultFont', 10, 'bold')
+        )
+        self.root_info.pack(fill=tk.X, expand=True)
+        
         self.canvas = tk.Canvas(self, width=780, height=540, bg='white')
         self.canvas.pack(padx=10, pady=(10,5))
         
@@ -39,7 +52,7 @@ class SizeGraph(tk.Tk):
             anchor='w',
             padx=10,
             pady=5,
-            font=('TkDefaultFont', 12)
+            font=('TkDefaultFont', 10)
         )
         self.info_label.pack(fill=tk.X, expand=True)
         
@@ -154,7 +167,12 @@ class SizeGraph(tk.Tk):
         if hasattr(self, 'progress_window'):
             print("Closing progress window...")
             self.progress_window.destroy()
-        self.info_label.config(text="")  # Clear the text after scan completes
+        
+        # Update root info label
+        total_size_gb = self.root_item.size / (1024 ** 3)
+        self.root_info.config(text=f"Folder: {self.root_item.path}\nTotal Size: {total_size_gb:.2f} GB")
+        
+        self.info_label.config(text="")
         print("Starting to draw graph...")
         self.draw_graph()
     
