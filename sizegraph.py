@@ -20,7 +20,7 @@ class SizeGraph(tk.Tk):
         super().__init__()
         
         self.title("File Size Graph")
-        self.geometry("800x600")
+        self.geometry("800x700")
         
         # Add protocol handler for window close button
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -28,18 +28,30 @@ class SizeGraph(tk.Tk):
         self.files: Dict[str, FileInfo] = {}
         self.scanning = True
         
-        # Add root info label before the canvas
+        # Create top frame for info and button
+        top_frame = tk.Frame(self)
+        top_frame.pack(fill=tk.X, expand=True)
+        
+        # Move root_info to top frame
         self.root_info = tk.Label(
-            self,
+            top_frame,
             text="",
-            wraplength=780,
+            wraplength=680,  # Reduced to make room for button
             justify=tk.LEFT,
             anchor='w',
             padx=10,
             pady=5,
             font=('TkDefaultFont', 10, 'bold')
         )
-        self.root_info.pack(fill=tk.X, expand=True)
+        self.root_info.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # Add new scan button
+        new_scan_btn = tk.Button(
+            top_frame,
+            text="Start new scan",
+            command=self.start_new_scan
+        )
+        new_scan_btn.pack(side=tk.RIGHT, padx=10, pady=5)
         
         self.canvas = tk.Canvas(self, width=780, height=540, bg='white')
         self.canvas.pack(padx=10, pady=(10,5))
@@ -62,6 +74,7 @@ class SizeGraph(tk.Tk):
         # Add these new instance variables
         self.total_files_scanned = 0
         self.total_size_scanned = 0
+        self.highlighted_rect = None  # Add this line to track highlighted rectangle
     
     def start_scan(self, root_path: str):
         """Initialize scanning process"""
@@ -168,9 +181,14 @@ class SizeGraph(tk.Tk):
             print("Closing progress window...")
             self.progress_window.destroy()
         
-        # Update root info label
-        total_size_gb = self.root_item.size / (1024 ** 3)
-        self.root_info.config(text=f"Folder: {self.root_item.path}\nTotal Size: {total_size_gb:.2f} GB")
+        # Update root info label with appropriate size units
+        size_mb = self.root_item.size / (1024 ** 2)
+        if size_mb > 1024:  # If larger than 1GB
+            size_str = f"{size_mb/1024:.2f} GB"
+        else:
+            size_str = f"{size_mb:.2f} MB"
+        
+        self.root_info.config(text=f"Folder: {self.root_item.path}\nTotal Size: {size_str}")
         
         self.info_label.config(text="")
         print("Starting to draw graph...")
@@ -354,8 +372,24 @@ class SizeGraph(tk.Tk):
         print("Draw graph finished")
     
     def show_file_info(self, file_info: FileInfo) -> None:
+        # Remove previous highlight if it exists
+        if self.highlighted_rect:
+            self.canvas.itemconfig(self.highlighted_rect, outline='white', width=1)
+            self.highlighted_rect = None
+        
+        # Find and highlight the clicked rectangle
+        overlapping = self.canvas.find_overlapping(
+            self.canvas.winfo_pointerx() - self.canvas.winfo_rootx(),
+            self.canvas.winfo_pointery() - self.canvas.winfo_rooty(),
+            self.canvas.winfo_pointerx() - self.canvas.winfo_rootx(),
+            self.canvas.winfo_pointery() - self.canvas.winfo_rooty()
+        )
+        if overlapping:
+            rect_id = overlapping[-1]  # Get the topmost rectangle
+            self.canvas.itemconfig(rect_id, outline='yellow', width=2)
+            self.highlighted_rect = rect_id
+        
         size_mb = file_info.size / (1024 * 1024)
-        # Calculate percentage relative to root item
         percentage = (file_info.size / self.root_item.size * 100) if self.root_item.size > 0 else 0
         
         path_str = str(file_info.path)
@@ -377,6 +411,23 @@ class SizeGraph(tk.Tk):
             seconds = elapsed % 60
             self.timer_label.config(text=f"Time elapsed: {minutes}:{seconds:02d}")
             self.after(1000, self.update_timer)
+    
+    def start_new_scan(self):
+        """Handle new scan button click"""
+        root_path = tk.filedialog.askdirectory(
+            title='Select Folder to Analyze',
+            initialdir='.'
+        )
+        
+        if root_path:
+            # Reset state
+            self.scanning = True
+            self.canvas.delete("all")
+            self.info_label.config(text="This will probably take a while...")
+            self.root_info.config(text="")
+            
+            # Start new scan
+            self.start_scan(root_path)
 
 if __name__ == "__main__":
     root = tk.Tk()
