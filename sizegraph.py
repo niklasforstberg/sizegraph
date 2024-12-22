@@ -54,7 +54,7 @@ class SizeGraph(tk.Tk):
         new_scan_btn.pack(side=tk.RIGHT, padx=10, pady=5)
         
         self.canvas = tk.Canvas(self, width=780, height=540, bg='white')
-        self.canvas.pack(padx=10, pady=(10,5))
+        self.canvas.pack(padx=10, pady=(5,5))
         
         self.info_label = tk.Label(
             self, 
@@ -74,7 +74,8 @@ class SizeGraph(tk.Tk):
         # Add these new instance variables
         self.total_files_scanned = 0
         self.total_size_scanned = 0
-        self.highlighted_rect = None  # Add this line to track highlighted rectangle
+        self.highlighted_rect = None
+        self.highlighted_file = None
     
     def start_scan(self, root_path: str):
         """Initialize scanning process"""
@@ -249,6 +250,12 @@ class SizeGraph(tk.Tk):
                 fill=color, outline='white', width=1
             )
             
+            # Store the parent-child relationship using canvas tags
+            if item.is_dir:
+                self.canvas.addtag_withtag(f"parent_{rect_id}", rect_id)
+                for child in item.children:
+                    self.canvas.addtag_withtag(f"child_of_{rect_id}", rect_id)
+            
             if width > 50 and height > 20:
                 self.canvas.create_text(
                     x + 5, y + height/2,
@@ -259,7 +266,7 @@ class SizeGraph(tk.Tk):
                 )
             
             self.canvas.tag_bind(rect_id, '<Button-1>', 
-                               lambda e, f=item: self.show_file_info(f))
+                               lambda e, f=item, r=rect_id: self.show_file_info(f, r))
         
         def worst_ratio(row, width, height, total_size):
             """Calculate the worst aspect ratio for a row of rectangles
@@ -371,22 +378,37 @@ class SizeGraph(tk.Tk):
         
         print("Draw graph finished")
     
-    def show_file_info(self, file_info: FileInfo) -> None:
-        # Remove previous highlight if it exists
+    def show_file_info(self, file_info: FileInfo, rect_id: int) -> None:
+        # Remove previous highlights
         if self.highlighted_rect:
             self.canvas.itemconfig(self.highlighted_rect, outline='white', width=1)
             self.highlighted_rect = None
+        if self.highlighted_file:
+            self.canvas.itemconfig(self.highlighted_file, outline='white', width=1)
+            self.highlighted_file = None
         
-        # Find and highlight the clicked rectangle
-        overlapping = self.canvas.find_overlapping(
-            self.canvas.winfo_pointerx() - self.canvas.winfo_rootx(),
-            self.canvas.winfo_pointery() - self.canvas.winfo_rooty(),
-            self.canvas.winfo_pointerx() - self.canvas.winfo_rootx(),
-            self.canvas.winfo_pointery() - self.canvas.winfo_rooty()
-        )
-        if overlapping:
-            rect_id = overlapping[-1]  # Get the topmost rectangle
+        # Find the parent rectangle if this is not a directory
+        if not file_info.is_dir:
+            # Highlight the file itself
             self.canvas.itemconfig(rect_id, outline='yellow', width=2)
+            self.highlighted_file = rect_id
+            
+            # Get all overlapping rectangles at click point
+            overlapping = self.canvas.find_overlapping(
+                self.canvas.winfo_pointerx() - self.canvas.winfo_rootx(),
+                self.canvas.winfo_pointery() - self.canvas.winfo_rooty(),
+                self.canvas.winfo_pointerx() - self.canvas.winfo_rootx(),
+                self.canvas.winfo_pointery() - self.canvas.winfo_rooty()
+            )
+            # Find the first rectangle that's tagged as a directory
+            for item_id in overlapping:
+                if self.canvas.gettags(item_id) and any('parent_' in tag for tag in self.canvas.gettags(item_id)):
+                    self.canvas.itemconfig(item_id, outline='blue', width=2)
+                    self.highlighted_rect = item_id
+                    break
+        else:
+            # If it's a directory, highlight it directly
+            self.canvas.itemconfig(rect_id, outline='blue', width=2)
             self.highlighted_rect = rect_id
         
         size_mb = file_info.size / (1024 * 1024)
