@@ -71,40 +71,153 @@ class TreemapCanvas(tk.Canvas):
         super().__init__(master, **kwargs)
         self.root_info = root_info
         self.border_colors = ['black', 'blue', 'brown']
+        self.file_colors = ['#CCCCCC', '#CCE5FF', '#E5CCCC']  # Light versions of border colors
         self.border_width = 2
-        self.min_size_for_label = 40  # minimum pixels to show label
+        self.min_size_for_label = 40
+        self.tooltip = None
         
-        # Bind resize event
         self.bind('<Configure>', self._on_resize)
+        self.bind('<Motion>', self._on_motion)
+        self.bind('<Leave>', self._hide_tooltip)
         
+    def _show_tooltip(self, x, y, text):
+        self._hide_tooltip()
+        self.tooltip = tk.Toplevel(self)
+        self.tooltip.wm_overrideredirect(True)
+        label = tk.Label(self.tooltip, text=text, bg='lightyellow', 
+                        relief='solid', borderwidth=1)
+        label.pack()
+        
+        # Position tooltip near cursor but ensure it's visible
+        screen_x = self.winfo_rootx() + x + 10
+        screen_y = self.winfo_rooty() + y + 10
+        self.tooltip.wm_geometry(f"+{screen_x}+{screen_y}")
+        
+    def _hide_tooltip(self, event=None):
+        if self.tooltip:
+            self.tooltip.destroy()
+            self.tooltip = None
+            
+    def _on_motion(self, event):
+        item = self.find_closest(event.x, event.y)
+        if item:
+            tags = self.gettags(item)
+            if tags and tags[0].startswith('path:'):
+                path_info = tags[0].split(':', 1)[1]
+                parent_info = tags[1].split(':', 1)[1] if len(tags) > 1 else ""
+                tooltip_text = f"File: {path_info}\nIn: {parent_info}" if parent_info else f"Folder: {path_info}"
+                self._show_tooltip(event.x, event.y, tooltip_text)
+            else:
+                self._hide_tooltip()
+                
     def _on_resize(self, event):
-        self.delete('all')  # Clear canvas
-        # Adjust initial coordinates to leave space for root border
+        self.delete('all')
         self._draw_treemap(
             self.root_info, 
-            self.border_width,  # Start x after border
-            self.border_width,  # Start y after border
-            event.width - 2 * self.border_width,  # Reduce width by border on both sides
-            event.height - 2 * self.border_width,  # Reduce height by border on both sides
+            self.border_width,
+            self.border_width,
+            event.width - 2 * self.border_width,
+            event.height - 2 * self.border_width,
             0
         )
         
     def _draw_treemap(self, node: FileInfo, x: float, y: float, width: float, height: float, color_idx: int):
-        if not node.is_dir:
+        if width < 1 or height < 1:  # Skip if too small
             return
             
-        # Draw rectangle for current directory
         border_color = self.border_colors[color_idx]
-        rect_id = self.create_rectangle(
+        if node.is_dir:
+            # Draw directory rectangle
+            rect_id = self.create_rectangle(
+                x, y, x + width, y + height,
+                fill='white',
+                outline=border_color,
+                width=self.border_width,
+                tags=(f'path:{node.path.name}',)
+            )
+            
+            # Add directory label if space permits
+            if width > self.min_size_for_label and height > self.min_size_for_label:
+                label = f"{node.path.name}\n{node.percentage:.1f}%"
+                self.create_text(
+                    x + width/2,
+                    y + height/2,
+                    text=label,
+                    anchor='center',
+                    font=('Arial', 8)
+                )
+            
+            # Process children
+            x += self.border_width
+            y += self.border_width
+            width -= 2 * self.border_width
+            height -= 2 * self.border_width
+            
+            # Separate files and directories
+            dirs = [c for c in node.children if c.is_dir]
+            files = [c for c in node.children if not c.is_dir]
+            
+            # Layout directories
+            if dirs:
+                if width > height:
+                    x_offset = x
+                    dir_width = width
+                    if files:
+                        dir_width = width * sum(d.percentage for d in dirs) / node.percentage
+                    for child in dirs:
+                        child_width = dir_width * (child.percentage / sum(d.percentage for d in dirs))
+                        next_color = (color_idx + 1) % len(self.border_colors)
+                        self._draw_treemap(child, x_offset, y, child_width, height, next_color)
+                        x_offset += child_width
+                    if files:
+                        self._draw_files(files, x_offset, y, width - dir_width, height, color_idx, node.path.name)
+                else:
+                    y_offset = y
+                    dir_height = height
+                    if files:
+                        dir_height = height * sum(d.percentage for d in dirs) / node.percentage
+                    for child in dirs:
+                        child_height = dir_height * (child.percentage / sum(d.percentage for d in dirs))
+                        next_color = (color_idx + 1) % len(self.border_colors)
+                        self._draw_treemap(child, x, y_offset, width, child_height, next_color)
+                        y_offset += child_height
+                    if files:
+                        self._draw_files(files, x, y_offset, width, height - dir_height, color_idx, node.path.name)
+            elif files:
+                self._draw_files(files, x, y, width, height, color_idx, node.path.name)
+                
+    def _draw_files(self, files: List[FileInfo], x: float, y: float, width: float, height: float, color_idx: int, parent_name: str):
+        if width < 1 or height < 1:  # Skip if too small
+            return
+            
+        total_size = sum(f.percentage for f in files)
+        if width > height:
+            x_offset = x
+            for file in files:
+                file_width = width * (file.percentage / total_size)
+                self._draw_file(file, x_offset, y, file_width, height, color_idx, parent_name)
+                x_offset += file_width
+        else:
+            y_offset = y
+            for file in files:
+                file_height = height * (file.percentage / total_size)
+                self._draw_file(file, x, y_offset, width, file_height, color_idx, parent_name)
+                y_offset += file_height
+                
+    def _draw_file(self, file: FileInfo, x: float, y: float, width: float, height: float, color_idx: int, parent_name: str):
+        if width < 1 or height < 1:  # Skip if too small
+            return
+            
+        self.create_rectangle(
             x, y, x + width, y + height,
-            fill='white',
-            outline=border_color,
-            width=self.border_width
+            fill=self.file_colors[color_idx],
+            outline=self.border_colors[color_idx],
+            width=1,
+            tags=(f'path:{file.path.name}', f'parent:{parent_name}')
         )
         
-        # Add label if space permits
         if width > self.min_size_for_label and height > self.min_size_for_label:
-            label = f"{node.path.name}\n{node.percentage:.1f}%"
+            label = f"{file.path.name}\n{file.percentage:.1f}%"
             self.create_text(
                 x + width/2,
                 y + height/2,
@@ -112,34 +225,6 @@ class TreemapCanvas(tk.Canvas):
                 anchor='center',
                 font=('Arial', 8)
             )
-        
-        # Calculate layout for children
-        if node.children:
-            dirs = [c for c in node.children if c.is_dir]
-            if not dirs:
-                return
-                
-            # Adjust coordinates for border
-            x += self.border_width
-            y += self.border_width
-            width -= 2 * self.border_width
-            height -= 2 * self.border_width
-            
-            # Layout children horizontally or vertically based on aspect ratio
-            if width > height:
-                x_offset = x
-                for child in dirs:
-                    child_width = width * (child.percentage / node.percentage)
-                    next_color = (color_idx + 1) % len(self.border_colors)
-                    self._draw_treemap(child, x_offset, y, child_width, height, next_color)
-                    x_offset += child_width
-            else:
-                y_offset = y
-                for child in dirs:
-                    child_height = height * (child.percentage / node.percentage)
-                    next_color = (color_idx + 1) % len(self.border_colors)
-                    self._draw_treemap(child, x, y_offset, width, child_height, next_color)
-                    y_offset += child_height
 
 def main():
     import sys
@@ -149,13 +234,13 @@ def main():
     
     print(f"\nScanning: {target_path}\n")
     root = traverse_directory(target_path)
-    print_tree(root)
 
-    calculate_percentages(root)
+    print(f"Root size: {root.size:,} bytes")
     
-    print("\nDirectories only:")
-    print_tree(root, dirs_only=True)
+    print("Calculating percentages...")
+    calculate_percentages(root)
 
+    print("Creating GUI window...")
     # Create GUI window
     root_window = tk.Tk()
     root_window.title("Directory Size Treemap")
