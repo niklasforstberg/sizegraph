@@ -84,8 +84,11 @@ class SizeGraph(tk.Tk):
         # Create and configure progress window
         self.progress_window = tk.Toplevel(self)
         self.progress_window.title("Scanning Files...")
-        self.progress_window.geometry("300x200")  # Reduced from 200 to 150
+        self.progress_window.geometry("300x200")
         self.progress_window.transient(self)
+        
+        # Add protocol handler for window close button
+        self.progress_window.protocol("WM_DELETE_WINDOW", self.cancel_scan)
         
         # Center progress window
         self.progress_window.geometry("+%d+%d" % (
@@ -450,6 +453,14 @@ class SizeGraph(tk.Tk):
             
             # Start new scan
             self.start_scan(root_path)
+    
+    def cancel_scan(self):
+        """Handle scan cancellation"""
+        self.scanning = False
+        if hasattr(self, 'progress_window'):
+            self.progress_window.destroy()
+        self.info_label.config(text="Scan cancelled")
+        self.root_info.config(text="")
 
 if __name__ == "__main__":
     root = tk.Tk()
