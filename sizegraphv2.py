@@ -2,9 +2,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 import os
-import tkinter as tk
-from tkinter import ttk
+import sys
 import math
+from PySide6.QtWidgets import (QApplication, QMainWindow, QGraphicsView, 
+                              QGraphicsScene, QVBoxLayout, QWidget, QLabel)
+from PySide6.QtCore import Qt, QRectF
+from PySide6.QtGui import QBrush, QColor, QLinearGradient, QPen
 
 @dataclass
 class FileInfo:
@@ -12,24 +15,36 @@ class FileInfo:
     size: int = 0
     is_dir: bool = False
     children: List['FileInfo'] = field(default_factory=list)
-    parent: Optional['FileInfo'] = field(default=None, repr=False)  # repr=False to avoid circular reference in prints
-    percentage: float = 0.0  # New field for size percentage
+    parent: Optional['FileInfo'] = field(default=None, repr=False)
+    percentage: float = 0.0
 
-def traverse_directory(path: Path, parent: Optional[FileInfo] = None) -> FileInfo:
-    path_obj = Path(path)
-    is_dir = path_obj.is_dir()
+def traverse_directory(path: Path, parent: Optional[FileInfo] = None, counter: list = None) -> FileInfo:
+    # Initialize counter on first call
+    if counter is None:
+        counter = [0]
     
-    obj = FileInfo(
-        path=path_obj,
-        is_dir=is_dir,
-        size=path_obj.stat().st_size if not is_dir else 0,
-        parent=parent
-    )
+    counter[0] += 1
+    if counter[0] % 10000 == 0:
+        print(f"Files scanned: {counter[0]:,}", flush=True)
+    
+    path_obj = Path(path)
+    is_dir = os.path.isdir(path)
+    
+    try:
+        size = os.stat(path).st_size if not is_dir else 0
+    except (PermissionError, OSError):
+        return FileInfo(path=path_obj, size=0, is_dir=is_dir, parent=parent)
+    
+    obj = FileInfo(path=path_obj, is_dir=is_dir, size=size, parent=parent)
     
     if is_dir:
-        for entry in os.scandir(path):
-            obj.children.append(traverse_directory(entry.path, parent=obj))
-        obj.size = sum(child.size for child in obj.children)
+        try:
+            entries = list(os.scandir(path))
+            obj.children = [None] * len(entries)
+            obj.children = [traverse_directory(entry.path, parent=obj, counter=counter) for entry in entries]
+            obj.size = sum(child.size for child in obj.children)
+        except (PermissionError, OSError):
+            pass
             
     return obj
 
@@ -53,9 +68,12 @@ def calculate_percentages(root: FileInfo) -> None:
     total_size = root.size  # Root size is the reference
     
     def _calc_percentage(node: FileInfo) -> None:
-        # Calculate percentage of total size
-        node.percentage = (node.size / total_size) * 100
-        # Recurse for directories
+        # Avoid division by zero
+        if total_size > 0:
+            node.percentage = (node.size / total_size) * 100
+        else:
+            node.percentage = 0.0
+            
         if node.is_dir:
             for child in node.children:
                 _calc_percentage(child)
@@ -66,190 +84,196 @@ def calculate_percentages(root: FileInfo) -> None:
     # Start calculation from root
     _calc_percentage(root)
 
-class TreemapCanvas(tk.Canvas):
-    def __init__(self, master, root_info: FileInfo, **kwargs):
-        super().__init__(master, **kwargs)
+class TreemapView(QGraphicsView):
+    def __init__(self, root_info: FileInfo):
+        super().__init__()
+        self.scene = QGraphicsScene()
+        self.setScene(self.scene)
         self.root_info = root_info
-        self.border_colors = ['black', 'blue', 'brown']
-        self.file_colors = ['#CCCCCC', '#CCE5FF', '#E5CCCC']  # Light versions of border colors
-        self.border_width = 2
-        self.min_size_for_label = 40
-        self.tooltip = None
         
-        self.bind('<Configure>', self._on_resize)
-        self.bind('<Motion>', self._on_motion)
-        self.bind('<Leave>', self._hide_tooltip)
+        # Define colors for files and folder borders
+        self.border_colors = [
+            QColor("#fe0f0f"),  # Red
+            QColor("#0000FF"),  # Blue
+            QColor("#22ff3e")   # Green
+        ]
+        self.file_colors = [
+            QColor("#ff7373"),  # Light red
+            QColor("#CCE5FF"),  # Light blue
+            QColor("#22ff3e")   # Light green
+        ]
         
-    def _show_tooltip(self, x, y, text):
-        self._hide_tooltip()
-        self.tooltip = tk.Toplevel(self)
-        self.tooltip.wm_overrideredirect(True)
-        label = tk.Label(self.tooltip, text=text, bg='lightyellow', 
-                        relief='solid', borderwidth=1)
-        label.pack()
+        self.info_label = QLabel("Click a file to see details")
+        self.draw_treemap()
         
-        # Position tooltip near cursor but ensure it's visible
-        screen_x = self.winfo_rootx() + x + 10
-        screen_y = self.winfo_rooty() + y + 10
-        self.tooltip.wm_geometry(f"+{screen_x}+{screen_y}")
+        # Enable viewport update on resize
+        self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
         
-    def _hide_tooltip(self, event=None):
-        if self.tooltip:
-            self.tooltip.destroy()
-            self.tooltip = None
-            
-    def _on_motion(self, event):
-        item = self.find_closest(event.x, event.y)
-        if item:
-            tags = self.gettags(item)
-            if tags and tags[0].startswith('path:'):
-                path_info = tags[0].split(':', 1)[1]
-                parent_info = tags[1].split(':', 1)[1] if len(tags) > 1 else ""
-                tooltip_text = f"File: {path_info}\nIn: {parent_info}" if parent_info else f"Folder: {path_info}"
-                self._show_tooltip(event.x, event.y, tooltip_text)
-            else:
-                self._hide_tooltip()
-                
-    def _on_resize(self, event):
-        self.delete('all')
-        self._draw_treemap(
-            self.root_info, 
-            self.border_width,
-            self.border_width,
-            event.width - 2 * self.border_width,
-            event.height - 2 * self.border_width,
-            0
-        )
+        # Fit scene in viewport
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.draw_treemap()
         
-    def _draw_treemap(self, node: FileInfo, x: float, y: float, width: float, height: float, color_idx: int):
-        if width < 1 or height < 1:  # Skip if too small
+    def draw_treemap(self):
+        self.scene.clear()
+        rect = self.viewport().rect()
+        self._draw_item(self.root_info, QRectF(0, 0, rect.width(), rect.height()), 0)
+        self.setSceneRect(self.scene.itemsBoundingRect())
+        self.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+
+    def _draw_item(self, item: FileInfo, rect: QRectF, depth: int) -> None:
+        if rect.width() < 1 or rect.height() < 1:
             return
-            
-        border_color = self.border_colors[color_idx]
-        if node.is_dir:
-            # Draw directory rectangle
-            rect_id = self.create_rectangle(
-                x, y, x + width, y + height,
-                fill='white',
-                outline=border_color,
-                width=self.border_width,
-                tags=(f'path:{node.path.name}',)
+
+        # For root folder, start with first color
+        if not item.parent:
+            color_index = 0
+        # For direct children of root, alternate between remaining colors
+        elif not item.parent.parent:
+            color_index = 1 + (item.parent.children.index(item) % 2)
+        # For all other folders, use parent's color
+        else:
+            parent_index = item.parent.children.index(item)
+            color_index = (parent_index % len(self.border_colors))
+        
+        if item.is_dir:
+            # Draw directory with transparent background and colored border
+            rect_item = self.scene.addRect(
+                rect,
+                QPen(self.border_colors[color_index]),
+                QBrush(Qt.transparent)
             )
             
-            # Add directory label if space permits
-            if width > self.min_size_for_label and height > self.min_size_for_label:
-                label = f"{node.path.name}\n{node.percentage:.1f}%"
-                self.create_text(
-                    x + width/2,
-                    y + height/2,
-                    text=label,
-                    anchor='center',
-                    font=('Arial', 8)
+            if rect.width() > 40 and rect.height() > 20:
+                text = self.scene.addText(
+                    f"{item.path.name}\n{item.percentage:.1f}%"
+                )
+                text.setDefaultTextColor(Qt.black)
+                text.setPos(
+                    rect.x() + (rect.width() - text.boundingRect().width()) / 2,
+                    rect.y() + (rect.height() - text.boundingRect().height()) / 2
                 )
             
-            # Process children
-            x += self.border_width
-            y += self.border_width
-            width -= 2 * self.border_width
-            height -= 2 * self.border_width
-            
-            # Separate files and directories
-            dirs = [c for c in node.children if c.is_dir]
-            files = [c for c in node.children if not c.is_dir]
-            
-            # Layout directories
-            if dirs:
-                if width > height:
-                    x_offset = x
-                    dir_width = width
-                    if files:
-                        dir_width = width * sum(d.percentage for d in dirs) / node.percentage
-                    for child in dirs:
-                        child_width = dir_width * (child.percentage / sum(d.percentage for d in dirs))
-                        next_color = (color_idx + 1) % len(self.border_colors)
-                        self._draw_treemap(child, x_offset, y, child_width, height, next_color)
-                        x_offset += child_width
-                    if files:
-                        self._draw_files(files, x_offset, y, width - dir_width, height, color_idx, node.path.name)
+            self._layout_children(item, rect, depth + 1)
+        else:
+            # Files should use their parent folder's color
+            if item.parent:
+                # Get parent's color index using same logic as above
+                if not item.parent.parent:
+                    color_index = 0  # Parent is root
+                elif not item.parent.parent.parent:
+                    color_index = 1 + (item.parent.parent.children.index(item.parent) % 2)
                 else:
-                    y_offset = y
-                    dir_height = height
-                    if files:
-                        dir_height = height * sum(d.percentage for d in dirs) / node.percentage
-                    for child in dirs:
-                        child_height = dir_height * (child.percentage / sum(d.percentage for d in dirs))
-                        next_color = (color_idx + 1) % len(self.border_colors)
-                        self._draw_treemap(child, x, y_offset, width, child_height, next_color)
-                        y_offset += child_height
-                    if files:
-                        self._draw_files(files, x, y_offset, width, height - dir_height, color_idx, node.path.name)
-            elif files:
-                self._draw_files(files, x, y, width, height, color_idx, node.path.name)
-                
-    def _draw_files(self, files: List[FileInfo], x: float, y: float, width: float, height: float, color_idx: int, parent_name: str):
-        if width < 1 or height < 1:  # Skip if too small
+                    parent_index = item.parent.parent.children.index(item.parent)
+                    color_index = (parent_index % len(self.border_colors))
+            
+            gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
+            base_color = self.file_colors[color_index]
+            darker = base_color.darker(150)
+            lighter = base_color.lighter(150)
+            
+            gradient.setColorAt(0, lighter)
+            gradient.setColorAt(0.5, base_color)
+            gradient.setColorAt(1, darker)
+            
+            rect_item = self.scene.addRect(
+                rect,
+                QPen(Qt.transparent),
+                QBrush(gradient)
+            )
+            
+            rect_item.setAcceptHoverEvents(True)
+            rect_item.setData(0, item)
+            
+            if rect.width() > 40 and rect.height() > 20:
+                text = self.scene.addText(
+                    f"{item.path.name}\n{item.percentage:.1f}%"
+                )
+                text.setDefaultTextColor(Qt.black)
+                text.setPos(
+                    rect.x() + (rect.width() - text.boundingRect().width()) / 2,
+                    rect.y() + (rect.height() - text.boundingRect().height()) / 2
+                )
+
+    def _layout_children(self, dir_item: FileInfo, rect: QRectF, depth: int):
+        if not dir_item.children:
             return
             
-        total_size = sum(f.percentage for f in files)
+        x, y = rect.x(), rect.y()
+        width, height = rect.width(), rect.height()
+        
+        # Use all children (both files and directories)
+        total_size = sum(child.size for child in dir_item.children)
+        
         if width > height:
             x_offset = x
-            for file in files:
-                file_width = width * (file.percentage / total_size)
-                self._draw_file(file, x_offset, y, file_width, height, color_idx, parent_name)
-                x_offset += file_width
+            for child in dir_item.children:
+                child_width = width * (child.size / total_size)
+                self._draw_item(child, QRectF(x_offset, y, child_width, height), depth)
+                x_offset += child_width
         else:
             y_offset = y
-            for file in files:
-                file_height = height * (file.percentage / total_size)
-                self._draw_file(file, x, y_offset, width, file_height, color_idx, parent_name)
-                y_offset += file_height
-                
-    def _draw_file(self, file: FileInfo, x: float, y: float, width: float, height: float, color_idx: int, parent_name: str):
-        if width < 1 or height < 1:  # Skip if too small
-            return
-            
-        self.create_rectangle(
-            x, y, x + width, y + height,
-            fill=self.file_colors[color_idx],
-            outline=self.border_colors[color_idx],
-            width=1,
-            tags=(f'path:{file.path.name}', f'parent:{parent_name}')
-        )
+            for child in dir_item.children:
+                child_height = height * (child.size / total_size)
+                self._draw_item(child, QRectF(x, y_offset, width, child_height), depth)
+                y_offset += child_height
+
+    def mousePressEvent(self, event):
+        item = self.scene.itemAt(self.mapToScene(event.pos()), self.transform())
+        if item:
+            file_info = item.data(0)
+            if file_info:
+                size_str = self._format_size(file_info.size)
+                self.info_label.setText(f"{file_info.path} ({size_str})")
+        super().mousePressEvent(event)
+
+    def _format_size(self, size: int) -> str:
+        if size >= 1_000_000_000:
+            return f"{size/1_000_000_000:.2f} GB"
+        return f"{size/1_000_000:.2f} MB"
+
+class MainWindow(QMainWindow):
+    def __init__(self, root_info: FileInfo):
+        super().__init__()
+        self.setWindowTitle("Directory Size Treemap")
         
-        if width > self.min_size_for_label and height > self.min_size_for_label:
-            label = f"{file.path.name}\n{file.percentage:.1f}%"
-            self.create_text(
-                x + width/2,
-                y + height/2,
-                text=label,
-                anchor='center',
-                font=('Arial', 8)
-            )
+        central_widget = QWidget()
+        layout = QVBoxLayout(central_widget)
+        
+        self.treemap_view = TreemapView(root_info)
+        
+        layout.addWidget(self.treemap_view.info_label)
+        layout.addWidget(self.treemap_view)
+        
+        self.setCentralWidget(central_widget)
+        self.resize(800, 800)
 
 def main():
-    import sys
-    
-    # Use command line arg if provided, else use current directory
-    target_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd()
-    
-    print(f"\nScanning: {target_path}\n")
-    root = traverse_directory(target_path)
+    import time
+    start_time = time.time()
 
+    target_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd()
+    absolute_path = target_path.resolve().absolute()
+    print(f"\nScanning: {absolute_path}\n")
+    root = traverse_directory(absolute_path)
     print(f"Root size: {root.size:,} bytes")
     
     print("Calculating percentages...")
     calculate_percentages(root)
 
+    print_tree(root, dirs_only=True)
+    
+    elapsed = time.time() - start_time
+    print(f"\nTotal time: {elapsed:.2f} seconds")
+    
     print("Creating GUI window...")
-    # Create GUI window
-    root_window = tk.Tk()
-    root_window.title("Directory Size Treemap")
-    root_window.geometry("800x800")
-
-    canvas = TreemapCanvas(root_window, root, bg='white')
-    canvas.pack(fill=tk.BOTH, expand=True)
-
-    root_window.mainloop()
+    app = QApplication(sys.argv)
+    window = MainWindow(root)
+    window.show()
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     main()

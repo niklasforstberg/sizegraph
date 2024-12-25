@@ -1,5 +1,5 @@
 # Core dependencies
-tkinter  # Usually comes with Python, no need to install separately
+PySide6>=6.6.0  # Qt for Python
 pathlib  # Part of Python standard library since 3.4
 typing   # Part of Python standard library since 3.5
 dataclasses  # Part of Python standard library since 3.7
