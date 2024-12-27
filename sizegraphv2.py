@@ -5,8 +5,9 @@ import os
 import sys
 import math
 from PySide6.QtWidgets import (QApplication, QMainWindow, QGraphicsView, 
-                              QGraphicsScene, QVBoxLayout, QWidget, QLabel)
-from PySide6.QtCore import Qt, QRectF
+                              QGraphicsScene, QVBoxLayout, QHBoxLayout, QWidget, 
+                              QLabel, QTreeView, QPushButton, QFileSystemModel)
+from PySide6.QtCore import Qt, QRectF, QDir
 from PySide6.QtGui import QBrush, QColor, QLinearGradient, QPen
 import psutil  # Add this to imports at top
 
@@ -238,43 +239,75 @@ class TreemapView(QGraphicsView):
             return f"{size/1_000_000_000:.2f} GB"
         return f"{size/1_000_000:.2f} MB"
 
+class DirectoryBrowser(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        
+        # Create tree view
+        self.tree_view = QTreeView()
+        self.model = QFileSystemModel()
+        self.model.setRootPath(QDir.rootPath())
+        
+        # Set model filters
+        self.model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot)
+        
+        self.tree_view.setModel(self.model)
+        self.tree_view.setRootIndex(self.model.index(QDir.rootPath()))
+        
+        # Hide all columns except the name column
+        for i in range(1, self.model.columnCount()):
+            self.tree_view.hideColumn(i)
+            
+        # Add scan button
+        self.scan_button = QPushButton("Scan Selected Folder")
+        
+        layout.addWidget(self.tree_view)
+        layout.addWidget(self.scan_button)
+
 class MainWindow(QMainWindow):
     def __init__(self, root_info: FileInfo):
         super().__init__()
         self.setWindowTitle("Directory Size Treemap")
         
         central_widget = QWidget()
-        layout = QVBoxLayout(central_widget)
+        layout = QHBoxLayout(central_widget)  # Changed to QHBoxLayout
         
+        # Left side - Treemap
+        treemap_container = QWidget()
+        treemap_layout = QVBoxLayout(treemap_container)
         self.treemap_view = TreemapView(root_info)
+        treemap_layout.addWidget(self.treemap_view.info_label)
+        treemap_layout.addWidget(self.treemap_view)
         
-        layout.addWidget(self.treemap_view.info_label)
-        layout.addWidget(self.treemap_view)
+        # Right side - Directory Browser
+        self.dir_browser = DirectoryBrowser()
+        self.dir_browser.scan_button.clicked.connect(self.scan_selected_directory)
+        self.dir_browser.tree_view.clicked.connect(self.on_directory_selected)
+        
+        # Add both widgets to main layout
+        layout.addWidget(treemap_container, stretch=2)
+        layout.addWidget(self.dir_browser, stretch=1)
         
         self.setCentralWidget(central_widget)
-        self.resize(800, 800)
+        self.resize(1200, 800)  # Wider default size
+
+    def scan_selected_directory(self):
+        index = self.dir_browser.tree_view.currentIndex()
+        if index.isValid():
+            path = Path(self.dir_browser.model.filePath(index))
+            root = traverse_directory(path)
+            calculate_percentages(root)
+            self.treemap_view.root_info = root
+            self.treemap_view.draw_treemap()
+
+    def on_directory_selected(self, index):
+        self.dir_browser.scan_button.setEnabled(index.isValid())
 
 def main():
-    import time
-    start_time = time.time()
-
-    target_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd()
-    absolute_path = target_path.resolve().absolute()
-    print(f"\nScanning: {absolute_path}\n")
-    root = traverse_directory(absolute_path)
-    print(f"Root size: {root.size:,} bytes")
-    
-    print("Calculating percentages...")
-    calculate_percentages(root)
-
-    print_tree(root, dirs_only=True)
-    
-    elapsed = time.time() - start_time
-    print(f"\nTotal time: {elapsed:.2f} seconds")
-    
-    print("Creating GUI window...")
     app = QApplication(sys.argv)
-    window = MainWindow(root)
+    # Create window with empty root (or minimal placeholder)
+    window = MainWindow(FileInfo(path=Path.home()))
     window.show()
     sys.exit(app.exec())
 
