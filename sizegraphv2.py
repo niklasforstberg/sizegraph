@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QGraphicsView,
                               QGraphicsScene, QVBoxLayout, QWidget, QLabel)
 from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QBrush, QColor, QLinearGradient, QPen
+import psutil  # Add this to imports at top
 
 @dataclass
 class FileInfo:
@@ -25,7 +26,9 @@ def traverse_directory(path: Path, parent: Optional[FileInfo] = None, counter: l
     
     counter[0] += 1
     if counter[0] % 10000 == 0:
-        print(f"Files scanned: {counter[0]:,}", flush=True)
+        process = psutil.Process()
+        mem_usage = process.memory_info().rss / 1024 / 1024  # Convert to MB
+        print(f"Files scanned: {counter[0]:,} | Memory usage: {mem_usage:.1f} MB", flush=True)
     
     path_obj = Path(path)
     is_dir = os.path.isdir(path)
