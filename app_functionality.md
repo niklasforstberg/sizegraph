@@ -31,7 +31,10 @@ Directory Browser Panel:
   - Select a folder to analyze by single-clicking
   - Show standard folder icons for visual familiarity
 - Update the treemap visualization when a new folder is selected
+- When the user clicks on a plus icon, the folder is expanded and the treemap and directory panel is updated to show the contents of the folder.
+- When the user clicks on a minus icon, the folder is collapsed and the treemap is updated to show the parent folder.
 - Maintain system-native look and feel for consistency
+- The user can start a directory traversal scan from the selected folder by clicking the a scan button.
 
 This would improve usability by:
 - Providing familiar navigation patterns
