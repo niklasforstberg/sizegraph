@@ -6,7 +6,8 @@ import sys
 import math
 from PySide6.QtWidgets import (QApplication, QMainWindow, QGraphicsView, 
                               QGraphicsScene, QVBoxLayout, QHBoxLayout, QWidget, 
-                              QLabel, QTreeView, QPushButton, QFileSystemModel)
+                              QLabel, QTreeView, QPushButton, QFileSystemModel, 
+                              QSizePolicy)
 from PySide6.QtCore import Qt, QRectF, QDir
 from PySide6.QtGui import QBrush, QColor, QLinearGradient, QPen
 import psutil  # Add this to imports at top
@@ -20,16 +21,19 @@ class FileInfo:
     parent: Optional['FileInfo'] = field(default=None, repr=False)
     percentage: float = 0.0
 
-def traverse_directory(path: Path, parent: Optional[FileInfo] = None, counter: list = None) -> FileInfo:
+def traverse_directory(path: Path, parent: Optional[FileInfo] = None, 
+                      counter: list = None, 
+                      progress_callback = None) -> FileInfo:
     # Initialize counter on first call
     if counter is None:
         counter = [0]
     
     counter[0] += 1
-    if counter[0] % 10000 == 0:
+    if counter[0] % 1000 == 0:
         process = psutil.Process()
         mem_usage = process.memory_info().rss / 1024 / 1024  # Convert to MB
-        print(f"Files scanned: {counter[0]:,} | Memory usage: {mem_usage:.1f} MB", flush=True)
+        if progress_callback:
+            progress_callback(counter[0], mem_usage)
     
     path_obj = Path(path)
     is_dir = os.path.isdir(path)
@@ -107,7 +111,11 @@ class TreemapView(QGraphicsView):
             QColor("#22ff3e")   # Light green
         ]
         
-        self.info_label = QLabel("Click a file to see details")
+        # Create info label with fixed height and expanding width
+        self.info_label = QLabel("")
+        self.info_label.setMinimumWidth(self.window().width())
+        self.info_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        
         self.draw_treemap()
         
         # Enable viewport update on resize
@@ -135,14 +143,16 @@ class TreemapView(QGraphicsView):
         # For root folder, start with first color
         if not item.parent:
             color_index = 0
-        # For direct children of root, alternate between remaining colors
-        elif not item.parent.parent:
-            color_index = 1 + (item.parent.children.index(item) % 2)
-        # For all other folders, use parent's color
+        # For files, use parent's color
+        elif not item.is_dir:
+            color_index = self._get_folder_color_index(item.parent)
+        # For folders, alternate between colors not used by parent
         else:
-            parent_index = item.parent.children.index(item)
-            color_index = (parent_index % len(self.border_colors))
-        
+            parent_color = self._get_folder_color_index(item.parent)
+            available_colors = [i for i in range(len(self.border_colors)) if i != parent_color]
+            sibling_index = sum(1 for sibling in item.parent.children[:item.parent.children.index(item)] if sibling.is_dir)
+            color_index = available_colors[sibling_index % len(available_colors)]
+
         if item.is_dir:
             # Draw directory with transparent background and colored border
             rect_item = self.scene.addRect(
@@ -150,37 +160,15 @@ class TreemapView(QGraphicsView):
                 QPen(self.border_colors[color_index]),
                 QBrush(Qt.transparent)
             )
-            
-            if rect.width() > 40 and rect.height() > 20:
-                text = self.scene.addText(
-                    f"{item.path.name}\n{item.percentage:.1f}%"
-                )
-                text.setDefaultTextColor(Qt.black)
-                text.setPos(
-                    rect.x() + (rect.width() - text.boundingRect().width()) / 2,
-                    rect.y() + (rect.height() - text.boundingRect().height()) / 2
-                )
-            
             self._layout_children(item, rect, depth + 1)
         else:
-            # Files should use their parent folder's color
-            if item.parent:
-                # Get parent's color index using same logic as above
-                if not item.parent.parent:
-                    color_index = 0  # Parent is root
-                elif not item.parent.parent.parent:
-                    color_index = 1 + (item.parent.parent.children.index(item.parent) % 2)
-                else:
-                    parent_index = item.parent.parent.children.index(item.parent)
-                    color_index = (parent_index % len(self.border_colors))
-            
             gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
             base_color = self.file_colors[color_index]
             darker = base_color.darker(150)
             lighter = base_color.lighter(150)
             
-            gradient.setColorAt(0, lighter)
-            gradient.setColorAt(0.5, base_color)
+            gradient.setColorAt(0.5, lighter)
+            gradient.setColorAt(0, base_color)
             gradient.setColorAt(1, darker)
             
             rect_item = self.scene.addRect(
@@ -191,16 +179,6 @@ class TreemapView(QGraphicsView):
             
             rect_item.setAcceptHoverEvents(True)
             rect_item.setData(0, item)
-            
-            if rect.width() > 40 and rect.height() > 20:
-                text = self.scene.addText(
-                    f"{item.path.name}\n{item.percentage:.1f}%"
-                )
-                text.setDefaultTextColor(Qt.black)
-                text.setPos(
-                    rect.x() + (rect.width() - text.boundingRect().width()) / 2,
-                    rect.y() + (rect.height() - text.boundingRect().height()) / 2
-                )
 
     def _layout_children(self, dir_item: FileInfo, rect: QRectF, depth: int):
         if not dir_item.children:
@@ -226,12 +204,16 @@ class TreemapView(QGraphicsView):
                 y_offset += child_height
 
     def mousePressEvent(self, event):
-        item = self.scene.itemAt(self.mapToScene(event.pos()), self.transform())
+        item = self.scene.itemAt(self.mapToScene(event.position().toPoint()), self.transform())
         if item:
             file_info = item.data(0)
             if file_info:
                 size_str = self._format_size(file_info.size)
-                self.info_label.setText(f"{file_info.path} ({size_str})")
+                # Elide the path if it's too long
+                path_str = str(file_info.path)
+                if len(path_str) > 100:  # Adjust this value as needed
+                    path_str = path_str[:50] + "..." + path_str[-47:]
+                self.info_label.setText(f"{path_str} ({size_str})")
         super().mousePressEvent(event)
 
     def _format_size(self, size: int) -> str:
@@ -239,10 +221,23 @@ class TreemapView(QGraphicsView):
             return f"{size/1_000_000_000:.2f} GB"
         return f"{size/1_000_000:.2f} MB"
 
+    def _get_folder_color_index(self, folder: FileInfo) -> int:
+        if not folder.parent:
+            return 0
+        parent_color = self._get_folder_color_index(folder.parent)
+        available_colors = [i for i in range(len(self.border_colors)) if i != parent_color]
+        sibling_index = sum(1 for sibling in folder.parent.children[:folder.parent.children.index(folder)] if sibling.is_dir)
+        return available_colors[sibling_index % len(available_colors)]
+
 class DirectoryBrowser(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)  # Remove margins
+        
+        # Add scan button at the top
+        self.scan_button = QPushButton("Scan Selected Folder")
+        layout.addWidget(self.scan_button)
         
         # Create tree view
         self.tree_view = QTreeView()
@@ -259,50 +254,113 @@ class DirectoryBrowser(QWidget):
         for i in range(1, self.model.columnCount()):
             self.tree_view.hideColumn(i)
             
-        # Add scan button
-        self.scan_button = QPushButton("Scan Selected Folder")
-        
         layout.addWidget(self.tree_view)
-        layout.addWidget(self.scan_button)
 
 class MainWindow(QMainWindow):
     def __init__(self, root_info: FileInfo):
         super().__init__()
         self.setWindowTitle("Directory Size Treemap")
         
+        # Create main central widget with vertical layout
         central_widget = QWidget()
-        layout = QHBoxLayout(central_widget)  # Changed to QHBoxLayout
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(5, 5, 5, 5)  # Add small margins
         
-        # Left side - Treemap
-        treemap_container = QWidget()
-        treemap_layout = QVBoxLayout(treemap_container)
+        # Add info label at the top, stretching full width
         self.treemap_view = TreemapView(root_info)
-        treemap_layout.addWidget(self.treemap_view.info_label)
-        treemap_layout.addWidget(self.treemap_view)
+        main_layout.addWidget(self.treemap_view.info_label)
         
-        # Right side - Directory Browser
+        # Create horizontal container for treemap and directory browser
+        content_widget = QWidget()
+        content_layout = QHBoxLayout(content_widget)
+        content_layout.setContentsMargins(0, 0, 0, 0)  # Remove internal margins
+        
+        # Add treemap (without its info label)
+        content_layout.addWidget(self.treemap_view, stretch=2)
+        
+        # Add directory browser
         self.dir_browser = DirectoryBrowser()
-        self.dir_browser.scan_button.clicked.connect(self.scan_selected_directory)
+        self.dir_browser.scan_button.clicked.connect(self.on_scan_clicked)
         self.dir_browser.tree_view.clicked.connect(self.on_directory_selected)
+        content_layout.addWidget(self.dir_browser, stretch=1)
         
-        # Add both widgets to main layout
-        layout.addWidget(treemap_container, stretch=2)
-        layout.addWidget(self.dir_browser, stretch=1)
+        # Add the content widget to main layout
+        main_layout.addWidget(content_widget)
         
         self.setCentralWidget(central_widget)
-        self.resize(1200, 800)  # Wider default size
+
+        # Get screen size and set window to maximum
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.setGeometry(screen)
+
+        # Add status bar
+        self.status_bar = self.statusBar()
+        self.size_label = QLabel()
+        self.count_label = QLabel()
+        self.progress_label = QLabel()
+        self.status_bar.addWidget(self.size_label)
+        self.status_bar.addWidget(self.count_label)
+        self.status_bar.addWidget(self.progress_label)
+        self.update_status_info(root_info)
+
+    def update_status_info(self, root: FileInfo):
+        # Calculate total files and folders
+        file_count = 0
+        folder_count = 0
+        
+        def count_items(node: FileInfo):
+            nonlocal file_count, folder_count
+            if node.is_dir:
+                folder_count += 1
+                for child in node.children:
+                    count_items(child)
+            else:
+                file_count += 1
+        
+        count_items(root)
+        
+        # Format size
+        total_size = self._format_size(root.size)
+        self.size_label.setText(f"Total Size: {total_size}")
+        self.count_label.setText(f"Files: {file_count:,} | Folders: {folder_count:,}")
+
+    def _format_size(self, size: int) -> str:
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size < 1024:
+                return f"{size:.2f} {unit}"
+            size /= 1024
+        return f"{size:.2f} PB"
 
     def scan_selected_directory(self):
         index = self.dir_browser.tree_view.currentIndex()
         if index.isValid():
+            print("Starting scan...")  # Debug
+            
+            def progress_callback(files_scanned: int, memory_mb: float):
+                print(f"Progress callback: {files_scanned} files")  # Debug
+                self.progress_label.setText(
+                    f"Scanning... Files: {files_scanned:,} | Memory: {memory_mb:.1f} MB"
+                )
+                self.status_bar.update()
+                QApplication.processEvents()
+            
             path = Path(self.dir_browser.model.filePath(index))
-            root = traverse_directory(path)
+            root = traverse_directory(path, counter=[0], progress_callback=progress_callback)
+            print("Scan complete")  # Debug
             calculate_percentages(root)
             self.treemap_view.root_info = root
             self.treemap_view.draw_treemap()
+            self.update_status_info(root)
+            self.progress_label.clear()
+            self.status_bar.update()  # Update one final time
 
     def on_directory_selected(self, index):
         self.dir_browser.scan_button.setEnabled(index.isValid())
+
+    def on_scan_clicked(self):
+        # Clear info label before starting scan
+        self.treemap_view.info_label.setText("")
+        self.scan_selected_directory()
 
 def main():
     app = QApplication(sys.argv)

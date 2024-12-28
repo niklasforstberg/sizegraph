@@ -42,4 +42,23 @@ This would improve usability by:
 - Enabling quick switching between different folders to analyze
 - Removing the need for manual path entry
 
-The app uses PySide6 for the UI.
+Size Information Display:
+- Show total size of scanned directory structure in a status bar or info panel. This Information Display is connected to the treemap. The size is found in the root of the treemap.
+- Format size display in appropriate units (KB/MB/GB) with 2 decimal precision
+- Update total size whenever a new folder is scanned with traverse_directory
+- it should also show the number of scanned files and folders.
+
+# Tech Stack
+- Python 3.7+ (for dataclasses support)
+- PySide6 6.6.0+ (Qt bindings for Python)
+- psutil 5.9.0+ (for memory monitoring during scans)
+- Standard library modules:
+  - pathlib (file system paths)
+  - typing (type hints)
+  - dataclasses (data structures)
+  - os, sys (system operations)
+
+Development tools:
+- black (code formatting)
+- pylint (code linting)
+- mypy (static type checking)
