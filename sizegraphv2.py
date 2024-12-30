@@ -93,6 +93,13 @@ def calculate_percentages(root: FileInfo) -> None:
     # Start calculation from root
     _calc_percentage(root)
 
+def format_size(size: int) -> str:
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size < 1024:
+            return f"{size:.2f} {unit}"
+        size /= 1024
+    return f"{size:.2f} PB"
+
 class TreemapView(QGraphicsView):
     def __init__(self, root_info: FileInfo):
         super().__init__()
@@ -209,18 +216,12 @@ class TreemapView(QGraphicsView):
         if item:
             file_info = item.data(0)
             if file_info:
-                size_str = self._format_size(file_info.size)
-                # Elide the path if it's too long
+                size_str = format_size(file_info.size)
                 path_str = str(file_info.path)
-                if len(path_str) > 100:  # Adjust this value as needed
+                if len(path_str) > 100:
                     path_str = path_str[:50] + "..." + path_str[-47:]
                 self.info_label.setText(f"{path_str} ({size_str})")
         super().mousePressEvent(event)
-
-    def _format_size(self, size: int) -> str:
-        if size >= 1_000_000_000:
-            return f"{size/1_000_000_000:.2f} GB"
-        return f"{size/1_000_000:.2f} MB"
 
     def _get_folder_color_index(self, folder: FileInfo) -> int:
         if not folder.parent:
@@ -321,16 +322,9 @@ class MainWindow(QMainWindow):
         count_items(root)
         
         # Format size
-        total_size = self._format_size(root.size)
+        total_size = format_size(root.size)
         self.size_label.setText(f"Total Size: {total_size}")
         self.count_label.setText(f"Files: {file_count:,} | Folders: {folder_count:,}")
-
-    def _format_size(self, size: int) -> str:
-        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-            if size < 1024:
-                return f"{size:.2f} {unit}"
-            size /= 1024
-        return f"{size:.2f} PB"
 
     def scan_selected_directory(self):
         index = self.dir_browser.tree_view.currentIndex()
