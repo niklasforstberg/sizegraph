@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QGraphicsView,
                               QSizePolicy)
 from PySide6.QtCore import Qt, QRectF, QDir
 from PySide6.QtGui import QBrush, QColor, QLinearGradient, QPen
-import psutil  # Add this to imports at top
+import psutil
 
 @dataclass
 class FileInfo:
@@ -29,9 +29,10 @@ def traverse_directory(path: Path, parent: Optional[FileInfo] = None,
         counter = [0]
     
     counter[0] += 1
-    if counter[0] % 1000 == 0:
+    if counter[0] % 5000 == 0: 
+        print(f"Scanned {counter[0]} files") 
         process = psutil.Process()
-        mem_usage = process.memory_info().rss / 1024 / 1024  # Convert to MB
+        mem_usage = process.memory_info().rss / 1024 / 1024
         if progress_callback:
             progress_callback(counter[0], mem_usage)
     
@@ -49,7 +50,7 @@ def traverse_directory(path: Path, parent: Optional[FileInfo] = None,
         try:
             entries = list(os.scandir(path))
             obj.children = [None] * len(entries)
-            obj.children = [traverse_directory(entry.path, parent=obj, counter=counter) for entry in entries]
+            obj.children = [traverse_directory(entry.path, parent=obj, counter=counter, progress_callback=progress_callback) for entry in entries]
             obj.size = sum(child.size for child in obj.children)
         except (PermissionError, OSError):
             pass
